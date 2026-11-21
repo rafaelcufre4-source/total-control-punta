@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Total Control Punta — Plataforma Corporativa IoT v6.0</title>
+  <title>Total Control Punta — Plataforma Corporativa IoT v6.1</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
@@ -51,7 +51,7 @@
         </div>
         <div>
           <label class="block text-slate-400 mb-1 font-semibold">Contraseña</label>
-          <input id="gate-pass" type="password" required placeholder="••••" class="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-white mono" />
+          <input id="gate-pass" type="password" required placeholder="••••••••" class="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-white mono" />
         </div>
         <div id="gate-error" class="hidden text-red-400 font-semibold text-xs bg-red-950/50 border border-red-800 p-2.5 rounded-xl"></div>
         <button type="submit" class="w-full py-3.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold uppercase tracking-wider shadow-lg transition">
@@ -60,7 +60,7 @@
       </form>
 
       <div class="border-t border-slate-800 pt-4 text-center">
-        <p class="text-[11px] text-slate-400">Acceso Maestro: <code class="text-amber-300 font-bold">admin</code> / Clave: <code class="text-amber-300 font-bold">1234</code></p>
+        <p class="text-[11px] text-slate-500">Acceso restringido a personal y administraciones autorizadas.</p>
       </div>
     </div>
   </div>
@@ -159,7 +159,7 @@
               <div class="flex items-center gap-2 flex-wrap">
                 <h1 class="font-extrabold text-base sm:text-lg tracking-tight text-white">TOTAL CONTROL PUNTA</h1>
                 <span id="sync-badge" class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-semibold">
-                  ● TELEMETRÍA EN VIVO
+                  ● CONECTANDO MQTT...
                 </span>
               </div>
               <p class="text-[11px] text-slate-400">Respaldo Cloud: <b class="text-sky-300">rafaelcufre4@gmail.com</b></p>
@@ -231,7 +231,7 @@
             <div class="lg:col-span-5 oled-screen rounded-2xl p-5 mono flex flex-col justify-between">
               <div class="flex justify-between items-center border-b border-emerald-900/60 pb-2 text-xs">
                 <span>OLED 1.3" I2C • PLACA IOT</span>
-                <span id="oled-conn" class="text-emerald-400 font-bold">ONLINE</span>
+                <span id="oled-conn" class="text-sky-400 font-bold">ESPERANDO PLACA</span>
               </div>
               <div class="my-4 space-y-2.5 text-xs sm:text-sm">
                 <div class="flex justify-between items-center">
@@ -336,9 +336,16 @@
 
           <!-- SENSORES EN USO: GASOIL Y BATERÍA -->
           <div class="bg-slate-900/95 border border-slate-700 rounded-2xl p-5">
-            <div class="flex items-center justify-between mb-4">
-              <h3 class="text-xs font-bold uppercase tracking-wider text-sky-400">Sensores Activos del Generador (Sincronizados con Placa ESP8266 y OLED)</h3>
-              <span class="text-[11px] text-slate-400 mono">IP Placa: 10.119.224.27</span>
+            <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+              <div>
+                <h3 class="text-xs font-bold uppercase tracking-wider text-sky-400">Sensores Activos del Generador (Enlace MQTT + Respaldo IP Local)</h3>
+                <p class="text-[11px] text-slate-400 mt-0.5">Canal MQTT Placa: <code class="text-emerald-300">total_control_punta/rafa_cufre_v6/placa</code></p>
+              </div>
+              <div class="flex items-center gap-2 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-xl">
+                <span class="text-[11px] text-slate-400 font-semibold">IP Local (opcional):</span>
+                <input id="placa-ip-input" value="10.137.95.27" placeholder="Ej: 10.137.95.27" class="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-sky-300 mono w-36" />
+                <button onclick="savePlacaIp()" class="px-2.5 py-1 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-bold">Guardar IP</button>
+              </div>
             </div>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div class="bg-slate-950 p-4 rounded-xl border border-slate-800">
@@ -550,13 +557,13 @@
       </section>
 
       <!-- ========================================== -->
-      <!-- VISTA 5: PANEL RAFA (ABM + INYECTOR PARCHES)-->
+      <!-- VISTA 5: PANEL RAFA (ABM + SEGURIDAD + PARCHES)-->
       <!-- ========================================== -->
       <section id="view-maestro" class="hidden space-y-6 no-print">
         <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <span class="text-xs font-bold uppercase text-sky-400">Panel Maestro (Rafa)</span>
-            <h2 class="text-xl font-bold text-white">Gestión de Cartera, Usuarios e Inyector de Parches</h2>
+            <h2 class="text-xl font-bold text-white">Gestión de Cartera, Seguridad e Inyector de Parches</h2>
           </div>
           <div class="flex items-center gap-2">
             <button onclick="openPdfReportModal()" class="px-3 py-2 rounded-xl bg-white text-slate-900 text-xs font-bold shadow">
@@ -566,6 +573,32 @@
               🗑️ Resetear Datos
             </button>
           </div>
+        </div>
+
+        <!-- BLOQUE DE CONTROL DE CLAVE MAESTRA DE RAFA -->
+        <div class="bg-slate-900 border border-emerald-500/50 rounded-2xl p-5">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3 mb-4">
+            <div>
+              <span class="text-[10px] font-bold uppercase text-emerald-400">Seguridad y Control Propietario</span>
+              <h3 class="text-sm font-bold text-white">🔐 Cambiar Usuario y Contraseña Maestra (Admin Rafa)</h3>
+            </div>
+            <span class="text-[11px] text-slate-400">Usuario maestro actual: <b id="current-master-user-label" class="text-amber-300 mono">admin</b></span>
+          </div>
+          <form onsubmit="updateMasterCredentials(event)" class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+            <div>
+              <label class="block text-slate-400 mb-1 font-semibold">Nuevo Usuario Maestro *</label>
+              <input id="new-master-user" required placeholder="Ej: rafael" class="w-full bg-slate-950 border border-slate-700 rounded-xl p-2.5 text-white mono" />
+            </div>
+            <div>
+              <label class="block text-slate-400 mb-1 font-semibold">Nueva Contraseña Maestra *</label>
+              <input id="new-master-pass" type="password" required placeholder="Tu nueva clave segura" class="w-full bg-slate-950 border border-slate-700 rounded-xl p-2.5 text-white mono" />
+            </div>
+            <div class="flex items-end">
+              <button type="submit" class="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold uppercase tracking-wider shadow">
+                🔐 Actualizar Clave Maestra
+              </button>
+            </div>
+          </form>
         </div>
 
         <div class="grid grid-cols-2 sm:grid-cols-5 gap-2">
@@ -602,7 +635,7 @@
                   ⚡ Aplicar Parche Instantáneo
                 </button>
                 <button onclick="exportUpdatedHtmlFile()" class="px-5 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-extrabold text-xs uppercase tracking-wider shadow-lg">
-                  💾 Descargar index.html Con Parches
+                  💾 Descargar index.html Actualizado
                 </button>
               </div>
             </div>
@@ -806,6 +839,58 @@
 
     const STORAGE_KEY = 'total_control_punta_final_v6';
     const PATCHES_KEY = 'total_control_punta_patches_v6';
+    const MASTER_CREDS_KEY = 'total_control_punta_master_creds_v6';
+    const PLACA_IP_KEY = 'total_control_punta_placa_ip_v6';
+
+    // Credenciales maestras por defecto (modificables desde Panel Rafa)
+    let DEFAULT_MASTER_USER = 'admin';
+    let DEFAULT_MASTER_PASS = '1234';
+
+    function getMasterCreds() {
+      try {
+        const saved = localStorage.getItem(MASTER_CREDS_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed && parsed.user && parsed.pass) return parsed;
+        }
+      } catch (e) {}
+      return { user: DEFAULT_MASTER_USER, pass: DEFAULT_MASTER_PASS };
+    }
+
+    function getPlacaIp() {
+      try {
+        const saved = localStorage.getItem(PLACA_IP_KEY);
+        if (saved && saved.trim()) return saved.trim();
+      } catch (e) {}
+      return '10.137.95.27';
+    }
+
+    function savePlacaIp() {
+      const inp = document.getElementById('placa-ip-input');
+      const val = inp ? inp.value.trim() : '';
+      if (!val) { showToast('Ingresá una IP válida'); return; }
+      localStorage.setItem(PLACA_IP_KEY, val);
+      ultimaLecturaPlaca = '';
+      sincronizarPlacaFisica();
+      showToast(`IP local guardada: ${val}`);
+    }
+
+    function updateMasterCredentials(e) {
+      e.preventDefault();
+      const newUser = document.getElementById('new-master-user').value.trim().toLowerCase();
+      const newPass = document.getElementById('new-master-pass').value.trim();
+      if (!newUser || !newPass) { showToast('Completá usuario y contraseña'); return; }
+
+      DEFAULT_MASTER_USER = newUser;
+      DEFAULT_MASTER_PASS = newPass;
+      localStorage.setItem(MASTER_CREDS_KEY, JSON.stringify({ user: newUser, pass: newPass }));
+
+      document.getElementById('new-master-user').value = '';
+      document.getElementById('new-master-pass').value = '';
+      const lbl = document.getElementById('current-master-user-label');
+      if (lbl) lbl.textContent = newUser;
+      showToast(`🔐 Clave maestra actualizada para "${newUser}"`);
+    }
 
     function nowStr() { return new Date().toLocaleTimeString('es-UY', { hour12: false }); }
 
@@ -874,6 +959,12 @@
 
     let sigCanvas, sigCtx, isDrawing = false;
     window.addEventListener('DOMContentLoaded', () => {
+      const ipInp = document.getElementById('placa-ip-input');
+      if (ipInp) ipInp.value = getPlacaIp();
+
+      const lbl = document.getElementById('current-master-user-label');
+      if (lbl) lbl.textContent = getMasterCreds().user;
+
       sigCanvas = document.getElementById('sig-canvas');
       if (sigCanvas) {
         sigCtx = sigCanvas.getContext('2d');
@@ -931,7 +1022,8 @@
       const err = document.getElementById('gate-error');
       err.classList.add('hidden');
 
-      if (u === 'admin' && p === '1234') {
+      const master = getMasterCreds();
+      if (u === master.user.toLowerCase() && p === master.pass) {
         loggedUser = { role: 'superadmin', name: 'Superadmin (Rafa)', entityId: null };
         unlockApp('maletin');
         showToast('Bienvenido Rafa (Modo Maestro)');
@@ -988,15 +1080,58 @@
 
     let mqttClient = null;
     const MQTT_TOPIC = 'total_control_punta/rafa_cufre_v6/state';
+    const MQTT_PLACA_TOPIC = 'total_control_punta/rafa_cufre_v6/placa';
+
+    function procesarDatosPlaca(data) {
+      if (!data || typeof data !== 'object') return;
+
+      const connEl = document.getElementById('oled-conn');
+      if (connEl) {
+        connEl.textContent = 'ONLINE (PLACA OK)';
+        connEl.className = 'text-emerald-400 font-bold';
+      }
+
+      if (typeof data.ip === 'string' && data.ip.trim()) {
+        const ipInp = document.getElementById('placa-ip-input');
+        if (ipInp && document.activeElement !== ipInp) ipInp.value = data.ip.trim();
+        localStorage.setItem(PLACA_IP_KEY, data.ip.trim());
+      }
+
+      const firmaActual = `${data.red_ute}_${data.generador_ok}_${data.gasoil}_${data.bateria}`;
+      if (firmaActual === ultimaLecturaPlaca) return;
+      ultimaLecturaPlaca = firmaActual;
+
+      if (typeof data.red_ute === 'boolean') state.uteOk = data.red_ute;
+      if (typeof data.generador_ok === 'boolean') state.generadorOk = data.generador_ok;
+
+      if (typeof data.gasoil === 'number') {
+        state.fuel = data.gasoil;
+        const sFuel = document.getElementById('slider-fuel');
+        if (sFuel) sFuel.value = state.fuel;
+      }
+      if (typeof data.bateria === 'number') {
+        state.batt = data.bateria;
+        const sBatt = document.getElementById('slider-batt');
+        if (sBatt) sBatt.value = state.batt;
+      }
+
+      updatePotentiometers();
+    }
+
     try {
       mqttClient = mqtt.connect('wss://broker.emqx.io:8084/mqtt');
       mqttClient.on('connect', () => {
         mqttClient.subscribe(MQTT_TOPIC);
-        document.getElementById('sync-badge').textContent = '● NUBE PC↔CEL ACTIVA';
+        mqttClient.subscribe(MQTT_PLACA_TOPIC);
+        document.getElementById('sync-badge').textContent = '● NUBE MQTT ACTIVA';
       });
       mqttClient.on('message', (topic, message) => {
         try {
           const incoming = JSON.parse(message.toString());
+          if (topic === MQTT_PLACA_TOPIC) {
+            procesarDatosPlaca(incoming);
+            return;
+          }
           if (incoming.sender !== window.name) applyRemoteState(incoming.payload);
         } catch (e) {}
       });
@@ -1368,46 +1503,26 @@
     }
 
     // ========================================================
-    // SINCRONIZACIÓN AUTOMÁTICA CON LA PLACA FÍSICA (ESP8266)
+    // SINCRONIZACIÓN LOCAL DE RESPALDO CON LA PLACA (ESP8266)
     // ========================================================
     let ultimaLecturaPlaca = '';
 
     async function sincronizarPlacaFisica() {
+      // Si la página corre sobre HTTPS (Railway), los navegadores bloquean HTTP local (Mixed Content);
+      // en ese caso los datos entran directo por MQTT sin bloquear la consola.
+      if (window.location.protocol === 'https:') return;
+
+      const ipActual = getPlacaIp();
+      if (!ipActual) return;
+
       try {
-        const response = await fetch('http://10.119.224.27/api/estado', { cache: 'no-store' });
+        const response = await fetch(`http://${ipActual}/api/estado`, { cache: 'no-store' });
         if (!response.ok) return;
         const data = await response.json();
-
-        const connEl = document.getElementById('oled-conn');
-        if (connEl) {
-          connEl.textContent = 'ONLINE (PLACA OK)';
-          connEl.className = 'text-emerald-400 font-bold';
-        }
-
-        const firmaActual = `${data.red_ute}_${data.generador_ok}_${data.gasoil}_${data.bateria}`;
-        if (firmaActual === ultimaLecturaPlaca) return;
-        ultimaLecturaPlaca = firmaActual;
-
-        if (typeof data.red_ute === 'boolean') {
-          state.uteOk = data.red_ute;
-        }
-        state.generadorOk = !!data.generador_ok;
-
-        if (typeof data.gasoil === 'number') {
-          state.fuel = data.gasoil;
-          const sFuel = document.getElementById('slider-fuel');
-          if (sFuel) sFuel.value = state.fuel;
-        }
-        if (typeof data.bateria === 'number') {
-          state.batt = data.bateria;
-          const sBatt = document.getElementById('slider-batt');
-          if (sBatt) sBatt.value = state.batt;
-        }
-
-        updatePotentiometers();
+        procesarDatosPlaca(data);
       } catch (error) {
         const connEl = document.getElementById('oled-conn');
-        if (connEl) {
+        if (connEl && !mqttClient?.connected) {
           connEl.textContent = 'SIN ENLACE IP';
           connEl.className = 'text-amber-400 font-bold';
         }
@@ -1716,7 +1831,7 @@
       const box = document.getElementById('patches-list');
       if (!box) return;
       if (!activePatches.length) {
-        box.innerHTML = `<p class="text-slate-500">No hay parches adicionales cargados. La versión base v6.0 está corriendo limpia.</p>`;
+        box.innerHTML = `<p class="text-slate-500">No hay parches adicionales cargados. La versión base v6.1 está corriendo limpia.</p>`;
         return;
       }
       box.innerHTML = activePatches.map((p, i) => `
@@ -1731,6 +1846,7 @@
     }
 
     function exportUpdatedHtmlFile() {
+      const master = getMasterCreds();
       const patchesScript = activePatches.map(p => `\n// === PARCHE: ${p.title} ===\ntry { ${p.code} } catch(e){}\n`).join('');
       const clone = document.documentElement.cloneNode(true);
       const appShell = clone.querySelector('#app-shell');
@@ -1739,8 +1855,14 @@
       if (authGate) authGate.classList.remove('hidden');
 
       const mainScript = clone.querySelector('#main-script');
-      if (mainScript && patchesScript) {
-        mainScript.textContent += '\n' + patchesScript;
+      if (mainScript) {
+        let updatedCode = mainScript.textContent
+          .replace(/let DEFAULT_MASTER_USER = '[^']*';/, `let DEFAULT_MASTER_USER = '${master.user.replace(/'/g, "\\'")}';`)
+          .replace(/let DEFAULT_MASTER_PASS = '[^']*';/, `let DEFAULT_MASTER_PASS = '${master.pass.replace(/'/g, "\\'")}';`);
+        if (patchesScript) {
+          updatedCode += '\n' + patchesScript;
+        }
+        mainScript.textContent = updatedCode;
       }
       const htmlContent = '<!DOCTYPE html>\n' + clone.outerHTML;
       const blob = new Blob([htmlContent], { type: 'text/html' });
