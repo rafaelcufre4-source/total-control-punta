@@ -2700,5 +2700,877 @@
   renderMasterExtensions();
 })();
 </script>
+<script>
+(function aplicarParcheMaestroTCP() {
+  if (window.__TCP_PATCH_V8_LOADED__) return;
+  window.__TCP_PATCH_V8_LOADED__ = true;
+
+  const SESSION_KEY = 'tcp_active_session_v1';
+
+  window.state = window.state || {};
+  state.admins = state.admins || [];
+  state.buildings = state.buildings || [];
+  state.managers = state.managers || [];
+  state.technicians = state.technicians || [];
+  state.serviceRequests = state.serviceRequests || [];
+  state.auditRecords = state.auditRecords || [];
+  state.externalLogs = state.externalLogs || [];
+  state.telemetria = state.telemetria || { combustible: 85, bateria: 12.6, uteOk: true, updatedAt: null };
+
+  let lastTelemetryStamp = '';
+  let isPushingState = false;
+
+  let techSession = {
+    buildingId: null,
+    mode: null,
+    requestId: null,
+    selectedTask: '',
+    customTask: '',
+    qrInScanned: false,
+    qrInTime: null,
+    qrOutScanned: false,
+    qrOutTime: null,
+    countdownInterval: null,
+    secondsLeft: 900,
+    recordedVideoName: null,
+    recordedVideoUrl: null
+  };
+
+  function capturarSesionActual() {
+    const activeTab = document.querySelector('[data-view].active, .tab-active, [aria-selected="true"]');
+    const activeView = document.querySelector('[id^="view-"]:not(.hidden)');
+    return {
+      activeTab: state.activeTab || state.currentTab || (activeTab ? activeTab.dataset.view : null),
+      activeViewId: activeView ? activeView.id : null,
+      activeRole: state.activeRole || state.role || null,
+      activeBuildingId: state.activeBuildingId || null,
+      activeTechId: state.activeTechId || null,
+      loggedIn: true,
+      savedAt: Date.now()
+    };
+  }
+
+  function guardarSesionLocal() {
+    try {
+      const snap = capturarSesionActual();
+      localStorage.setItem(SESSION_KEY, JSON.stringify(snap));
+    } catch (e) {}
+  }
+
+  function restaurarSesionLocal() {
+    try {
+      const raw = localStorage.getItem(SESSION_KEY);
+      if (!raw) return;
+      const snap = JSON.parse(raw);
+      if (snap.activeBuildingId && !state.activeBuildingId) state.activeBuildingId = snap.activeBuildingId;
+      if (snap.activeTechId && !state.activeTechId) state.activeTechId = snap.activeTechId;
+      if (snap.activeRole && !state.activeRole) state.activeRole = snap.activeRole;
+      if (snap.activeTab && !state.activeTab) state.activeTab = snap.activeTab;
+
+      const loginModal = document.querySelector('[id*="login"], [class*="login-modal"]');
+      if (loginModal && snap.loggedIn) {
+        loginModal.classList.add('hidden');
+        loginModal.style.display = 'none';
+      }
+
+      if (snap.activeViewId) {
+        const targetView = document.getElementById(snap.activeViewId);
+        if (targetView) {
+          document.querySelectorAll('[id^="view-"]').forEach(v => {
+            if (v.id !== snap.activeViewId) v.classList.add('hidden');
+          });
+          targetView.classList.remove('hidden');
+        }
+      }
+    } catch (e) {}
+  }
+
+  function aplicarTelemetriaEnEstado(tel) {
+    if (!tel || typeof tel !== 'object') return;
+    state.telemetria = {
+      ...state.telemetria,
+      ...tel
+    };
+
+    if (typeof tel.combustible !== 'undefined') {
+      state.combustible = tel.combustible;
+      state.fuel = tel.combustible;
+      state.diesel = tel.combustible;
+      state.nivelCombustible = tel.combustible;
+    }
+    if (typeof tel.bateria !== 'undefined') {
+      state.bateria = tel.bateria;
+      state.battery = tel.bateria;
+      state.voltajeBateria = tel.bateria;
+    }
+    if (typeof tel.uteOk !== 'undefined') {
+      state.uteOk = tel.uteOk;
+      state.redOk = tel.uteOk;
+      state.mainsOk = tel.uteOk;
+    }
+
+    const maletin = document.getElementById('view-maletin') || document.querySelector('[id*="maletin"]') || document.body;
+    if (maletin && typeof tel.bateria !== 'undefined') {
+      const batNum = Number(tel.bateria);
+      if (!Number.isNaN(batNum)) {
+        const formattedV = `${batNum.toFixed(1)} V`;
+        maletin.querySelectorAll('*').forEach(el => {
+          if (el.children.length === 0 && el.textContent) {
+            const t = el.textContent.trim();
+            if (/^\d{1,2}(\.\d+)?\s*V$/i.test(t) || t.includes('Batería') || t.includes('BATERÍA')) {
+              if (/^\d{1,2}(\.\d+)?\s*V$/i.test(t)) {
+                el.textContent = formattedV;
+              }
+            }
+          }
+        });
+      }
+    }
+  }
+
+  async function pullStateFromCloud() {
+    if (isPushingState) return;
+    try {
+      const res = await fetch('/api/state', { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+
+      let changed = false;
+
+      if (data.telemetria) {
+        const stamp = JSON.stringify(data.telemetria);
+        if (stamp !== lastTelemetryStamp) {
+          lastTelemetryStamp = stamp;
+          aplicarTelemetriaEnEstado(data.telemetria);
+          changed = true;
+        }
+      }
+
+      if (data.appState) {
+        const prevBateria = state.telemetria && state.telemetria.bateria;
+        const prevComb = state.telemetria && state.telemetria.combustible;
+        const prevUte = state.telemetria && state.telemetria.uteOk;
+
+        Object.assign(state, data.appState);
+
+        if (data.telemetria) {
+          aplicarTelemetriaEnEstado(data.telemetria);
+        } else {
+          if (typeof prevBateria !== 'undefined') state.bateria = prevBateria;
+          if (typeof prevComb !== 'undefined') state.combustible = prevComb;
+          if (typeof prevUte !== 'undefined') state.uteOk = prevUte;
+        }
+        changed = true;
+      }
+
+      if (changed) {
+        localStorage.setItem('total_control_punta_final_v6', JSON.stringify(state));
+        if (typeof window.renderAll === 'function') window.renderAll();
+        restaurarSesionLocal();
+        renderMasterExtensions();
+      }
+    } catch (e) {
+      console.warn('Modo local activo o esperando endpoint /api/state:', e);
+    }
+  }
+
+  async function pushStateToCloud() {
+    isPushingState = true;
+    try {
+      guardarSesionLocal();
+      localStorage.setItem('total_control_punta_final_v6', JSON.stringify(state));
+      await fetch('/api/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appState: state })
+      });
+    } catch (e) {
+      console.warn('No se pudo sincronizar con la nube:', e);
+    } finally {
+      setTimeout(() => { isPushingState = false; }, 250);
+    }
+  }
+
+  const originalSaveLocal = window.saveLocal;
+  window.saveLocal = function () {
+    if (typeof originalSaveLocal === 'function') originalSaveLocal();
+    guardarSesionLocal();
+    pushStateToCloud();
+    renderMasterExtensions();
+  };
+
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('button, [role="tab"], [data-view], [onclick]');
+    if (btn) {
+      if (btn.dataset && btn.dataset.view) {
+        state.activeTab = btn.dataset.view;
+        state.currentTab = btn.dataset.view;
+      }
+      setTimeout(guardarSesionLocal, 80);
+    }
+  });
+
+  function limpiarMaletinDemo() {
+    const maletin = document.getElementById('view-maletin') || document.querySelector('[id*="maletin"]');
+    if (!maletin) return;
+    const cards = maletin.querySelectorAll('div, section, article');
+    cards.forEach(el => {
+      const txt = (el.innerText || '').toUpperCase();
+      if (
+        (txt.includes('CÁMARA AUDITORÍA') || txt.includes('VIDEO GRABADO Y LISTO')) &&
+        !txt.includes('OLED 1.3') &&
+        !txt.includes('SEÑALES LUMINOSAS')
+      ) {
+        if (el.children.length < 15) el.style.display = 'none';
+      }
+    });
+  }
+
+  window.imprimirHojaDobleQR = function (buildingId) {
+    const b = (state.buildings || []).find(x => String(x.id) === String(buildingId)) || {
+      id: buildingId || 'DEMO-1',
+      name: 'Edificio Seleccionado'
+    };
+    const codeIn = `TCP_IN:${b.id}`;
+    const codeOut = `TCP_OUT:${b.id}`;
+    const qrInImg = `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(codeIn)}`;
+    const qrOutImg = `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(codeOut)}`;
+
+    const win = window.open('', '_blank', 'width=850,height=900');
+    win.document.write(`
+      <html>
+      <head>
+        <title>Cartel Sala de Máquinas - ${b.name}</title>
+        <style>
+          body { font-family: Arial, sans-serif; text-align: center; padding: 30px; color: #111; }
+          .sheet { border: 4px solid #0f172a; border-radius: 14px; padding: 25px; max-width: 720px; margin: 0 auto; }
+          h1 { margin: 0 0 6px; font-size: 26px; letter-spacing: 1px; }
+          h2 { margin: 0 0 20px; font-size: 20px; color: #0284c7; }
+          .qr-grid { display: flex; justify-content: space-around; gap: 25px; margin-top: 20px; }
+          .qr-box { border: 3px dashed #334155; border-radius: 12px; padding: 18px; width: 45%; }
+          .qr-box.in { border-color: #16a34a; }
+          .qr-box.out { border-color: #ea580c; }
+          .qr-box h3 { margin: 0 0 12px; font-size: 18px; }
+          .code-tag { font-family: monospace; font-weight: bold; margin-top: 10px; font-size: 14px; color: #475569; }
+          .footer { margin-top: 25px; font-size: 13px; color: #334155; font-weight: bold; }
+          @media print { .no-print { display: none; } }
+        </style>
+      </head>
+      <body>
+        <div class="sheet">
+          <h1>TOTAL CONTROL PUNTA</h1>
+          <h2>SALA DE GENERADORES — ${b.name.toUpperCase()}</h2>
+          <p>Escanee obligatoriamente el QR de ENTRADA al ingresar a sala y el QR de SALIDA al finalizar.</p>
+          <div class="qr-grid">
+            <div class="qr-box in">
+              <h3 style="color:#16a34a;">1. QR DE ENTRADA</h3>
+              <img src="${qrInImg}" alt="QR Entrada" />
+              <div class="code-tag">${codeIn}</div>
+            </div>
+            <div class="qr-box out">
+              <h3 style="color:#ea580c;">2. QR DE SALIDA</h3>
+              <img src="${qrOutImg}" alt="QR Salida" />
+              <div class="code-tag">${codeOut}</div>
+            </div>
+          </div>
+          <div class="footer">
+            IMPORTANTE: Luego de escanear el QR de SALIDA dispone de un máximo de 15 MINUTOS para registrar la firma en recepción.
+          </div>
+        </div>
+        <div class="no-print" style="margin-top:20px;">
+          <button onclick="window.print()" style="padding:12px 24px;font-size:16px;font-weight:bold;cursor:pointer;">🖨️ Imprimir Hoja Ahora</button>
+        </div>
+      </body>
+      </html>
+    `);
+    win.document.close();
+  };
+
+  window.enviarPedidoAsistencia = function (origenRol) {
+    const bId = state.activeBuildingId || (state.buildings[0] && state.buildings[0].id) || 'DEMO-1';
+    const bObj = (state.buildings || []).find(x => String(x.id) === String(bId)) || { id: bId, name: 'Edificio Demo Punta' };
+    const inputEl = document.getElementById(`input-asistencia-${origenRol}`);
+    const desc = inputEl ? inputEl.value.trim() : '';
+
+    if (!desc) {
+      alert('Por favor escriba una breve descripción del problema (ej: Pérdida de gasoil en el piso).');
+      return;
+    }
+
+    const nuevoPedido = {
+      id: 'REQ-' + Date.now(),
+      buildingId: bObj.id,
+      buildingName: bObj.name,
+      origin: origenRol,
+      description: desc,
+      createdAt: new Date().toLocaleString('es-UY'),
+      status: 'ACTIVA'
+    };
+
+    state.serviceRequests.unshift(nuevoPedido);
+    if (inputEl) inputEl.value = '';
+    window.saveLocal();
+    alert(`🚨 Alerta enviada correctamente para ${bObj.name}. Ya impactó en Administración, Técnico y Panel Rafa.`);
+  };
+
+  window.abrirEscaneoCamaraQR = function (tipoEsperado) {
+    const bId = state.activeBuildingId || (state.buildings[0] && state.buildings[0].id) || 'DEMO-1';
+    const bObj = (state.buildings || []).find(x => String(x.id) === String(bId)) || { id: bId, name: 'Edificio Demo Punta' };
+
+    if (tipoEsperado === 'IN' && techSession.qrInScanned && !techSession.qrOutScanned) {
+      alert('⚠️ Ya escaneaste el QR de ENTRADA. Primero debés escanear el QR de SALIDA.');
+      return;
+    }
+    if (tipoEsperado === 'OUT' && !techSession.qrInScanned) {
+      alert('⛔ Bloqueado: No podés escanear el QR de SALIDA sin haber leído primero el QR de ENTRADA.');
+      return;
+    }
+
+    const reclamoActivo = state.serviceRequests.find(
+      r => String(r.buildingId) === String(bObj.id) && r.status === 'ACTIVA'
+    );
+
+    if (tipoEsperado === 'IN') {
+      if (reclamoActivo) {
+        techSession.mode = 'reclamo';
+        techSession.requestId = reclamoActivo.id;
+        techSession.selectedTask = `Reclamo (${reclamoActivo.origin}): ${reclamoActivo.description}`;
+      } else {
+        const sel = document.getElementById('tcp-tech-task-select');
+        const custom = document.getElementById('tcp-tech-task-custom');
+        const val = sel ? sel.value : '';
+        if (!val) {
+          alert('⚠️ Antes de leer el QR de ENTRADA debés seleccionar la tarea a realizar.');
+          return;
+        }
+        if (val === 'ESPECIFICA' && (!custom || !custom.value.trim())) {
+          alert('⚠️ Escribí el detalle de la tarea específica antes de escanear el QR.');
+          return;
+        }
+        techSession.mode = 'rutina';
+        techSession.requestId = null;
+        techSession.selectedTask = val === 'ESPECIFICA' ? custom.value.trim() : val;
+      }
+    }
+
+    const codigoEsperado = tipoEsperado === 'IN' ? `TCP_IN:${bObj.id}` : `TCP_OUT:${bObj.id}`;
+    mostrarModalCamaraQR(codigoEsperado, tipoEsperado, bObj);
+  };
+
+  function mostrarModalCamaraQR(codigoEsperado, tipoEsperado, bObj) {
+    let modal = document.getElementById('tcp-qr-modal');
+    if (modal) modal.remove();
+
+    modal = document.createElement('div');
+    modal.id = 'tcp-qr-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(2,6,23,0.92);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px;';
+    modal.innerHTML = `
+      <div style="background:#0f172a;border:2px solid #0284c7;border-radius:14px;max-width:440px;width:100%;padding:20px;color:#fff;text-align:center;">
+        <h3 style="margin:0 0 8px;color:#38bdf8;">📷 Escaneando QR de ${tipoEsperado === 'IN' ? 'ENTRADA' : 'SALIDA'}</h3>
+        <p style="font-size:13px;color:#cbd5e1;margin:0 0 12px;">Apuntá la cámara al código <b>${codigoEsperado}</b> en la puerta de <b>${bObj.name}</b></p>
+        <video id="tcp-qr-video" autoplay playsinline style="width:100%;max-height:260px;background:#000;border-radius:10px;border:1px solid #334155;"></video>
+        <div id="tcp-qr-status" style="margin-top:10px;font-size:12px;color:#94a3b8;">Buscando código QR con la cámara...</div>
+        <div style="margin-top:14px;display:flex;gap:8px;justify-content:center;">
+          <button id="tcp-qr-cancel" style="background:#ef4444;color:#fff;border:none;padding:10px 16px;border-radius:8px;font-weight:bold;cursor:pointer;">Cancelar</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    let streamRef = null;
+    let scanLoop = null;
+
+    function cerrarCamara() {
+      if (scanLoop) clearInterval(scanLoop);
+      if (streamRef) streamRef.getTracks().forEach(t => t.stop());
+      modal.remove();
+    }
+
+    document.getElementById('tcp-qr-cancel').onclick = cerrarCamara;
+
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+      .then(stream => {
+        streamRef = stream;
+        const video = document.getElementById('tcp-qr-video');
+        video.srcObject = stream;
+
+        if ('BarcodeDetector' in window) {
+          const detector = new BarcodeDetector({ formats: ['qr_code'] });
+          scanLoop = setInterval(async () => {
+            try {
+              const barcodes = await detector.detect(video);
+              if (barcodes.length > 0) {
+                const leido = (barcodes[0].rawValue || '').trim();
+                validarLecturaQR(leido, codigoEsperado, tipoEsperado, bObj, cerrarCamara);
+              }
+            } catch (err) {}
+          }, 350);
+        } else {
+          const script = document.createElement('script');
+          script.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js';
+          script.onload = () => {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            scanLoop = setInterval(() => {
+              if (video.readyState === video.HAVE_ENOUGH_DATA && window.jsQR) {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const code = window.jsQR(imgData.data, imgData.width, imgData.height);
+                if (code && code.data) {
+                  validarLecturaQR(code.data.trim(), codigoEsperado, tipoEsperado, bObj, cerrarCamara);
+                }
+              }
+            }, 350);
+          };
+          document.head.appendChild(script);
+        }
+      })
+      .catch(err => {
+        document.getElementById('tcp-qr-status').innerHTML = `<span style="color:#f87171;">No se pudo abrir la cámara (${err.message}). Revisá los permisos HTTPS.</span>`;
+      });
+  }
+
+  function validarLecturaQR(leido, codigoEsperado, tipoEsperado, bObj, cerrarCamara) {
+    if (leido !== codigoEsperado) {
+      const statusEl = document.getElementById('tcp-qr-status');
+      if (statusEl) {
+        statusEl.innerHTML = `<span style="color:#f87171;font-weight:bold;">❌ Código incorrecto (${leido}). Se requiere: ${codigoEsperado}</span>`;
+      }
+      return;
+    }
+
+    cerrarCamara();
+
+    if (tipoEsperado === 'IN') {
+      techSession.buildingId = bObj.id;
+      techSession.qrInScanned = true;
+      techSession.qrInTime = new Date().toLocaleString('es-UY');
+      techSession.qrOutScanned = false;
+      if (typeof window.scanQrEntradaReal === 'function') window.scanQrEntradaReal();
+      alert(`✅ QR de ENTRADA validado en ${bObj.name}. Grabación de auditoría iniciada.`);
+      renderMasterExtensions();
+    } else if (tipoEsperado === 'OUT') {
+      techSession.qrOutScanned = true;
+      techSession.qrOutTime = new Date().toLocaleString('es-UY');
+      techSession.recordedVideoName = `TCP_${bObj.name.replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 16).replace(':', '-')}.webm`;
+      if (typeof window.scanQrSalidaReal === 'function') window.scanQrSalidaReal();
+      iniciarVentanaFirma15Minutos(bObj);
+    }
+  }
+
+  function iniciarVentanaFirma15Minutos(bObj) {
+    if (techSession.countdownInterval) clearInterval(techSession.countdownInterval);
+    techSession.secondsLeft = 15 * 60;
+
+    renderMasterExtensions();
+
+    techSession.countdownInterval = setInterval(() => {
+      techSession.secondsLeft--;
+      const timerEl = document.getElementById('tcp-sig-countdown');
+      if (timerEl) {
+        const m = String(Math.floor(techSession.secondsLeft / 60)).padStart(2, '0');
+        const s = String(techSession.secondsLeft % 60).padStart(2, '0');
+        timerEl.textContent = `${m}:${s}`;
+      }
+
+      if (techSession.secondsLeft <= 0) {
+        clearInterval(techSession.countdownInterval);
+        invalidarVisitaPorTiempoVencido(bObj);
+      }
+    }, 1000);
+  }
+
+  function invalidarVisitaPorTiempoVencido(bObj) {
+    const obsEl = document.getElementById('tcp-tech-obs');
+    const obs = obsEl ? obsEl.value.trim() : '';
+
+    const registroInvalido = {
+      id: 'AUD-' + Date.now(),
+      buildingId: bObj.id,
+      buildingName: bObj.name,
+      techName: state.activeTechId || 'Rafael Cufré',
+      task: techSession.selectedTask,
+      observations: obs || 'Sin observaciones adicionales',
+      qrInTime: techSession.qrInTime,
+      qrOutTime: techSession.qrOutTime,
+      signedAt: null,
+      porterName: 'SIN FIRMA (TIEMPO VENCIDO > 15 MIN)',
+      signatureDataUrl: null,
+      videoName: techSession.recordedVideoName,
+      status: 'INVALIDADA',
+      sharedWithPorter: false
+    };
+
+    state.auditRecords.unshift(registroInvalido);
+    resetTechSession();
+    window.saveLocal();
+    alert('⛔ TIEMPO VENCIDO (15:00 min): La visita quedó INVALIDADA por falta de firma a tiempo y fue derivada en rojo al Panel Rafa.');
+  }
+
+  window.confirmarFirmaPortero = function () {
+    const bId = techSession.buildingId || state.activeBuildingId || (state.buildings[0] && state.buildings[0].id) || 'DEMO-1';
+    const bObj = (state.buildings || []).find(x => String(x.id) === String(bId)) || { id: bId, name: 'Edificio Demo Punta' };
+    const canvas = document.getElementById('tcp-sig-pad');
+    const porterInput = document.getElementById('tcp-sig-porter-name');
+    const sinPersonalCheck = document.getElementById('tcp-sig-no-staff');
+    const obsEl = document.getElementById('tcp-tech-obs');
+
+    const sinPersonal = sinPersonalCheck && sinPersonalCheck.checked;
+    const porterName = sinPersonal ? 'Sin personal en recepción' : (porterInput ? porterInput.value.trim() : '');
+
+    if (!sinPersonal && !porterName) {
+      alert('Por favor ingresá el nombre del portero que firma o marcá "Sin personal en recepción".');
+      return;
+    }
+
+    if (techSession.countdownInterval) clearInterval(techSession.countdownInterval);
+
+    if (techSession.requestId) {
+      const req = state.serviceRequests.find(r => r.id === techSession.requestId);
+      if (req) req.status = 'CERRADA';
+    } else {
+      state.serviceRequests.forEach(r => {
+        if (String(r.buildingId) === String(bObj.id) && r.status === 'ACTIVA') r.status = 'CERRADA';
+      });
+    }
+
+    const nuevoRegistro = {
+      id: 'AUD-' + Date.now(),
+      buildingId: bObj.id,
+      buildingName: bObj.name,
+      techName: state.activeTechId || 'Rafael Cufré',
+      task: techSession.selectedTask,
+      observations: obsEl ? obsEl.value.trim() : '',
+      qrInTime: techSession.qrInTime,
+      qrOutTime: techSession.qrOutTime,
+      signedAt: new Date().toLocaleString('es-UY'),
+      porterName: porterName,
+      signatureDataUrl: canvas ? canvas.toDataURL() : null,
+      videoName: techSession.recordedVideoName,
+      status: 'VALIDADA',
+      sharedWithPorter: false
+    };
+
+    state.auditRecords.unshift(nuevoRegistro);
+    resetTechSession();
+    window.saveLocal();
+    alert('✅ Visita cerrada, firmada y validada correctamente en la nube.');
+  };
+
+  function resetTechSession() {
+    if (techSession.countdownInterval) clearInterval(techSession.countdownInterval);
+    techSession = {
+      buildingId: null,
+      mode: null,
+      requestId: null,
+      selectedTask: '',
+      customTask: '',
+      qrInScanned: false,
+      qrInTime: null,
+      qrOutScanned: false,
+      qrOutTime: null,
+      countdownInterval: null,
+      secondsLeft: 900,
+      recordedVideoName: null,
+      recordedVideoUrl: null
+    };
+  }
+
+  window.toggleCompartirConPortero = function (auditId, checked) {
+    const rec = state.auditRecords.find(r => r.id === auditId);
+    if (rec) {
+      rec.sharedWithPorter = !!checked;
+      window.saveLocal();
+    }
+  };
+
+  window.eliminarRegistroRafa = function (tipo, id) {
+    if (!confirm('¿Seguro que querés eliminar este archivo/registro de forma permanente?')) return;
+    if (tipo === 'audit') {
+      state.auditRecords = state.auditRecords.filter(r => r.id !== id);
+    } else if (tipo === 'request') {
+      state.serviceRequests = state.serviceRequests.filter(r => r.id !== id);
+    } else if (tipo === 'external') {
+      state.externalLogs = state.externalLogs.filter(r => String(r.id) !== String(id));
+    }
+    window.saveLocal();
+  };
+
+  window.limpiarRegistrosDemoRafa = function () {
+    if (!confirm('¿Eliminar los registros de prueba/demo de otras empresas y dejar la lista limpia?')) return;
+    state.externalLogs = [];
+    document.querySelectorAll('[data-demo-row], tr, .log-item').forEach(el => {
+      const t = (el.innerText || '').toLowerCase();
+      if (t.includes('demo') || t.includes('otis') || t.includes('ascensor') || t.includes('prueba')) {
+        if (el.tagName === 'TR') el.remove();
+      }
+    });
+    window.saveLocal();
+  };
+
+  function renderMasterExtensions() {
+    limpiarMaletinDemo();
+
+    const activeBId = state.activeBuildingId || (state.buildings[0] && state.buildings[0].id) || 'DEMO-1';
+    const activeBObj = (state.buildings || []).find(x => String(x.id) === String(activeBId)) || {
+      id: activeBId,
+      name: 'Edificio Demo Punta'
+    };
+
+    const reclamosActivosEdificio = (state.serviceRequests || []).filter(
+      r => String(r.buildingId) === String(activeBObj.id) && r.status === 'ACTIVA'
+    );
+
+    const viewCliente = document.getElementById('view-cliente') || document.getElementById('view-portero') || document.getElementById('view-admin');
+    if (viewCliente) {
+      let box = document.getElementById('tcp-ext-cliente');
+      if (!box) {
+        box = document.createElement('div');
+        box.id = 'tcp-ext-cliente';
+        box.style.cssText = 'margin-top:16px;display:grid;gap:14px;';
+        viewCliente.appendChild(box);
+      }
+
+      const videosValidados = (state.auditRecords || []).filter(
+        r => String(r.buildingId) === String(activeBObj.id) && r.status === 'VALIDADA'
+      );
+      const videosPortero = videosValidados.filter(r => r.sharedWithPorter);
+
+      box.innerHTML = `
+        <div style="background:#1e293b;border:1px solid #ef4444;border-radius:12px;padding:14px;color:#fff;">
+          <h4 style="margin:0 0 8px;color:#f87171;">🚨 Solicitar Servicio Técnico / Reportar Falla en Sala (${activeBObj.name})</h4>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <input id="input-asistencia-Portero" type="text" placeholder="Describa el problema (ej: Pérdida de gasoil en el piso)" style="flex:1;min-width:240px;padding:10px;border-radius:8px;border:1px solid #475569;background:#0f172a;color:#fff;" />
+            <button onclick="enviarPedidoAsistencia('Portero / Admin')" style="background:#ef4444;color:#fff;border:none;padding:10px 18px;border-radius:8px;font-weight:bold;cursor:pointer;">🚨 Pedir Asistencia</button>
+          </div>
+          ${reclamosActivosEdificio.length > 0 ? `
+            <div style="margin-top:10px;padding:8px 12px;background:#7f1d1d;border-radius:8px;font-size:13px;">
+              <b>Reclamo Activo Pendiente:</b> ${reclamosActivosEdificio[0].description} (${reclamosActivosEdificio[0].createdAt})
+            </div>
+          ` : ''}
+        </div>
+
+        <div style="background:#0f172a;border:1px solid #334155;border-radius:12px;padding:14px;color:#fff;">
+          <h4 style="margin:0 0 10px;color:#38bdf8;">🎬 Videos e Informes Validados — Vista Administración (${activeBObj.name})</h4>
+          ${videosValidados.length === 0 ? `<p style="font-size:13px;color:#94a3b8;margin:0;">No hay visitas validadas registradas para este edificio.</p>` : `
+            <div style="display:grid;gap:8px;">
+              ${videosValidados.map(v => `
+                <div style="background:#1e293b;padding:10px;border-radius:8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+                  <div style="font-size:13px;">
+                    <b>${v.task}</b> — Téc: ${v.techName}<br/>
+                    <span style="color:#94a3b8;">Entrada: ${v.qrInTime} | Salida: ${v.qrOutTime} | Firmó: ${v.porterName}</span><br/>
+                    <span style="color:#38bdf8;">Archivo: ${v.videoName}</span>
+                  </div>
+                  <label style="display:flex;align-items:center;gap:6px;font-size:13px;background:#0f172a;padding:6px 10px;border-radius:6px;cursor:pointer;">
+                    <input type="checkbox" ${v.sharedWithPorter ? 'checked' : ''} onchange="toggleCompartirConPortero('${v.id}', this.checked)" />
+                    Compartir video con Portero
+                  </label>
+                </div>
+              `).join('')}
+            </div>
+          `}
+        </div>
+
+        <div style="background:#0f172a;border:1px solid #334155;border-radius:12px;padding:14px;color:#fff;">
+          <h4 style="margin:0 0 10px;color:#4ade80;">👁️ Videos Habilitados para Portería (${activeBObj.name})</h4>
+          ${videosPortero.length === 0 ? `<p style="font-size:13px;color:#94a3b8;margin:0;">Ningún video compartido por la Administración todavía.</p>` : `
+            <div style="display:grid;gap:8px;">
+              ${videosPortero.map(v => `
+                <div style="background:#1e293b;padding:10px;border-radius:8px;font-size:13px;">
+                  <b>${v.task}</b> — Archivo: <span style="color:#4ade80;">${v.videoName}</span><br/>
+                  <span style="color:#94a3b8;">Fecha: ${v.signedAt} | Conformidad: ${v.porterName}</span>
+                </div>
+              `).join('')}
+            </div>
+          `}
+        </div>
+      `;
+    }
+
+    const viewTecnico = document.getElementById('view-tecnico');
+    if (viewTecnico) {
+      let boxT = document.getElementById('tcp-ext-tecnico');
+      if (!boxT) {
+        boxT = document.createElement('div');
+        boxT.id = 'tcp-ext-tecnico';
+        boxT.style.cssText = 'margin-top:16px;';
+        viewTecnico.prepend(boxT);
+      }
+
+      const hayReclamo = reclamosActivosEdificio.length > 0;
+
+      boxT.innerHTML = `
+        <div style="background:#0f172a;border:2px solid #0284c7;border-radius:12px;padding:16px;color:#fff;margin-bottom:16px;">
+          <h3 style="margin:0 0 10px;color:#38bdf8;">🛠️ Operativa QR en Sala — ${activeBObj.name}</h3>
+
+          ${hayReclamo ? `
+            <div style="background:#7f1d1d;border:1px solid #ef4444;padding:12px;border-radius:8px;margin-bottom:12px;">
+              <b>🚨 ATENDIENDO RECLAMO ACTIVO (${reclamosActivosEdificio[0].origin}):</b><br/>
+              <span>"${reclamosActivosEdificio[0].description}"</span>
+              <div style="font-size:12px;color:#fca5a5;margin-top:4px;">Al escanear el QR de Entrada y cerrar con QR de Salida + Firma, este pedido quedará cerrado automáticamente.</div>
+            </div>
+          ` : `
+            <div style="background:#1e293b;padding:12px;border-radius:8px;margin-bottom:12px;">
+              <label style="font-size:13px;font-weight:bold;display:block;margin-bottom:6px;">1º Seleccioná la tarea a realizar antes de leer el QR de Entrada:</label>
+              <select id="tcp-tech-task-select" onchange="document.getElementById('tcp-tech-task-custom').style.display = this.value === 'ESPECIFICA' ? 'block' : 'none';" style="width:100%;padding:10px;border-radius:8px;background:#0f172a;color:#fff;border:1px solid #475569;">
+                <option value="">-- Seleccionar Tarea --</option>
+                <option value="Limpieza general de sala y equipo" ${techSession.selectedTask === 'Limpieza general de sala y equipo' ? 'selected' : ''}>Limpieza general de sala y equipo</option>
+                <option value="Pruebas técnicas y arranque en vacío" ${techSession.selectedTask === 'Pruebas técnicas y arranque en vacío' ? 'selected' : ''}>Pruebas técnicas y arranque en vacío</option>
+                <option value="Control de niveles (Gasoil / Aceite / Batería)" ${techSession.selectedTask === 'Control de niveles (Gasoil / Aceite / Batería)' ? 'selected' : ''}>Control de niveles (Gasoil / Aceite / Batería)</option>
+                <option value="ESPECIFICA">Escribir tarea específica...</option>
+              </select>
+              <input id="tcp-tech-task-custom" type="text" placeholder="Describí la tarea específica a realizar..." style="display:none;width:100%;margin-top:8px;padding:10px;border-radius:8px;background:#0f172a;color:#fff;border:1px solid #475569;" />
+            </div>
+          `}
+
+          <textarea id="tcp-tech-obs" placeholder="Observaciones técnicas del trabajo realizado (inmodificables luego del cierre)..." style="width:100%;min-height:65px;padding:10px;border-radius:8px;background:#1e293b;color:#fff;border:1px solid #475569;margin-bottom:12px;"></textarea>
+
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <button onclick="abrirEscaneoCamaraQR('IN')" ${techSession.qrInScanned ? 'disabled' : ''} style="flex:1;background:${techSession.qrInScanned ? '#475569' : '#16a34a'};color:#fff;border:none;padding:12px;border-radius:8px;font-weight:bold;cursor:pointer;">
+              📷 1. Escanear QR ENTRADA ${techSession.qrInScanned ? '✓ (' + techSession.qrInTime + ')' : ''}
+            </button>
+            <button onclick="abrirEscaneoCamaraQR('OUT')" ${(!techSession.qrInScanned || techSession.qrOutScanned) ? 'disabled' : ''} style="flex:1;background:${(!techSession.qrInScanned || techSession.qrOutScanned) ? '#475569' : '#ea580c'};color:#fff;border:none;padding:12px;border-radius:8px;font-weight:bold;cursor:pointer;">
+              📷 2. Escanear QR SALIDA ${techSession.qrOutScanned ? '✓' : ''}
+            </button>
+          </div>
+
+          ${techSession.qrOutScanned ? `
+            <div style="margin-top:16px;background:#ffffff;color:#0f172a;padding:16px;border-radius:10px;border:3px solid #ea580c;">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                <b style="font-size:15px;">✍️ Firma de Conformidad en Recepción / Portería</b>
+                <span style="background:#dc2626;color:#fff;padding:4px 10px;border-radius:6px;font-weight:bold;font-family:monospace;">
+                  ⏱️ Tiempo restante: <span id="tcp-sig-countdown">15:00</span>
+                </span>
+              </div>
+              <p style="font-size:12px;color:#475569;margin:0 0 8px;">Si no se registra la firma dentro de los 15 minutos posteriores al QR de Salida, la visita quedará invalidada.</p>
+              <canvas id="tcp-sig-pad" width="420" height="140" style="width:100%;height:140px;border:2px dashed #64748b;border-radius:8px;background:#f8fafc;touch-action:none;"></canvas>
+              <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center;">
+                <input id="tcp-sig-porter-name" type="text" placeholder="Nombre y apellido del Portero..." style="flex:1;padding:9px;border-radius:6px;border:1px solid #94a3b8;" />
+                <label style="font-size:13px;display:flex;align-items:center;gap:4px;">
+                  <input id="tcp-sig-no-staff" type="checkbox" /> Sin personal en recepción
+                </label>
+                <button onclick="confirmarFirmaPortero()" style="background:#16a34a;color:#fff;border:none;padding:10px 18px;border-radius:8px;font-weight:bold;cursor:pointer;">✅ Confirmar Firma y Cerrar Visita</button>
+              </div>
+            </div>
+          ` : ''}
+        </div>
+      `;
+
+      if (techSession.qrOutScanned) inicializarCanvasFirma();
+    }
+
+    const viewMaestro = document.getElementById('view-maestro');
+    if (viewMaestro) {
+      let boxM = document.getElementById('tcp-ext-maestro');
+      if (!boxM) {
+        boxM = document.createElement('div');
+        boxM.id = 'tcp-ext-maestro';
+        boxM.style.cssText = 'margin-top:16px;';
+        viewMaestro.prepend(boxM);
+      }
+
+      const filtroEdificioId = state.rafaFilterBuildingId || 'ALL';
+      const registrosFiltrados = (state.auditRecords || []).filter(
+        r => filtroEdificioId === 'ALL' || String(r.buildingId) === String(filtroEdificioId)
+      );
+
+      boxM.innerHTML = `
+        <div style="background:#0f172a;border:2px solid #eab308;border-radius:12px;padding:16px;color:#fff;margin-bottom:16px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
+            <h3 style="margin:0;color:#facc15;">👑 Control Total Rafa — Auditorías, Códigos QR y Limpieza de Archivos</h3>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button onclick="imprimirHojaDobleQR('${activeBObj.id}')" style="background:#0284c7;color:#fff;border:none;padding:9px 14px;border-radius:8px;font-weight:bold;cursor:pointer;">
+                🖨️ Imprimir Doble QR (${activeBObj.name})
+              </button>
+              <button onclick="limpiarRegistrosDemoRafa()" style="background:#dc2626;color:#fff;border:none;padding:9px 14px;border-radius:8px;font-weight:bold;cursor:pointer;">
+                🗑️ Borrar Registros Demo / Otras Empresas
+              </button>
+            </div>
+          </div>
+
+          <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <label style="font-size:13px;font-weight:bold;">🏢 Filtrar archivos por Edificio:</label>
+            <select onchange="state.rafaFilterBuildingId = this.value; window.saveLocal();" style="padding:8px 12px;border-radius:8px;background:#1e293b;color:#fff;border:1px solid #475569;">
+              <option value="ALL" ${filtroEdificioId === 'ALL' ? 'selected' : ''}>Todos los Edificios (${(state.auditRecords || []).length})</option>
+              ${(state.buildings || []).map(b => `
+                <option value="${b.id}" ${String(filtroEdificioId) === String(b.id) ? 'selected' : ''}>${b.name}</option>
+              `).join('')}
+            </select>
+          </div>
+
+          <div style="display:grid;gap:10px;">
+            ${registrosFiltrados.length === 0 ? `<p style="font-size:13px;color:#94a3b8;margin:0;">No hay archivos de auditoría en este filtro.</p>` : registrosFiltrados.map(r => {
+              const esInvalida = r.status === 'INVALIDADA';
+              return `
+                <div style="background:${esInvalida ? '#450a0a' : '#1e293b'};border:2px solid ${esInvalida ? '#ef4444' : '#334155'};padding:12px;border-radius:10px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+                  <div style="font-size:13px;">
+                    <span style="background:${esInvalida ? '#dc2626' : '#16a34a'};color:#fff;padding:2px 8px;border-radius:4px;font-weight:bold;font-size:11px;">
+                      ${esInvalida ? '⛔ VISITA INVALIDADA (>15 MIN SIN FIRMA)' : '✅ VISITA VALIDADA'}
+                    </span>
+                    <b style="margin-left:6px;font-size:14px;">${r.buildingName}</b> — ${r.task}<br/>
+                    <span style="color:#cbd5e1;">Técnico: ${r.techName} | Entrada: ${r.qrInTime} | Salida: ${r.qrOutTime}</span><br/>
+                    <span style="color:#94a3b8;">Observaciones (Inalterables): "${r.observations || 'Sin observaciones'}" | Recepción: ${r.porterName}</span><br/>
+                    <span style="color:#38bdf8;">Video: ${r.videoName}</span>
+                  </div>
+                  <div>
+                    <button onclick="eliminarRegistroRafa('audit', '${r.id}')" style="background:#ef4444;color:#fff;border:none;padding:8px 12px;border-radius:6px;font-weight:bold;cursor:pointer;">
+                      🗑️ Eliminar Archivo
+                    </button>
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        </div>
+      `;
+    }
+  }
+
+  function inicializarCanvasFirma() {
+    const canvas = document.getElementById('tcp-sig-pad');
+    if (!canvas || canvas.__initialized) return;
+    canvas.__initialized = true;
+    const ctx = canvas.getContext('2d');
+    ctx.strokeStyle = '#0f172a';
+    ctx.lineWidth = 2.5;
+    let drawing = false;
+
+    const getPos = e => {
+      const rect = canvas.getBoundingClientRect();
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+      return {
+        x: (clientX - rect.left) * (canvas.width / rect.width),
+        y: (clientY - rect.top) * (canvas.height / rect.height)
+      };
+    };
+
+    const start = e => { drawing = true; const p = getPos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); e.preventDefault(); };
+    const move = e => { if (!drawing) return; const p = getPos(e); ctx.lineTo(p.x, p.y); ctx.stroke(); e.preventDefault(); };
+    const end = () => { drawing = false; };
+
+    canvas.addEventListener('mousedown', start);
+    canvas.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', end);
+    canvas.addEventListener('touchstart', start, { passive: false });
+    canvas.addEventListener('touchmove', move, { passive: false });
+    canvas.addEventListener('touchend', end);
+  }
+
+  const origRenderAll = window.renderAll;
+  window.renderAll = function () {
+    if (typeof origRenderAll === 'function') origRenderAll();
+    restaurarSesionLocal();
+    renderMasterExtensions();
+  };
+
+  restaurarSesionLocal();
+  setInterval(pullStateFromCloud, 1000);
+  pullStateFromCloud();
+  renderMasterExtensions();
+})();
+</script>
 </body>
 </html>
